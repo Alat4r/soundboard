@@ -69,6 +69,10 @@ data class StartSequence(
     val pointX: Float = 0.5f,
     val pointY: Float = 1f / 3f,
     val style: RevealStyle = RevealStyle.CIRCLE,
+    /** Ab dieser Stelle (ms) läuft das Video. */
+    val startMs: Int = 0,
+    /** Hier (ms) friert das Video ein und die Animation beginnt; null = am Videoende. */
+    val revealAtMs: Int? = null,
 ) {
     val isGif: Boolean get() = file.substringAfterLast('.').lowercase() == "gif"
 }
@@ -126,6 +130,8 @@ class StartSequenceStore(private val context: Context) {
                 pointX = s.optDouble("pointX", 0.5).toFloat(),
                 pointY = s.optDouble("pointY", 1.0 / 3).toFloat(),
                 style = runCatching { RevealStyle.valueOf(s.getString("style")) }.getOrDefault(RevealStyle.CIRCLE),
+                startMs = s.optInt("startMs", 0),
+                revealAtMs = if (s.has("revealAtMs") && !s.isNull("revealAtMs")) s.getInt("revealAtMs") else null,
             )
         }
         val active = if (obj.isNull("active")) null else obj.getString("active")
@@ -146,6 +152,8 @@ class StartSequenceStore(private val context: Context) {
                     put("pointX", s.pointX.toDouble())
                     put("pointY", s.pointY.toDouble())
                     put("style", s.style.name)
+                    put("startMs", s.startMs)
+                    put("revealAtMs", s.revealAtMs ?: JSONObject.NULL)
                 })
             }
         })

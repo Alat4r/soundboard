@@ -48,6 +48,12 @@ internal class IntroMediaView(context: Context) :
     /** Gleich nach dem Laden loslegen (Startanimation) oder auf [play] warten (Editor). */
     var autoPlay = true
 
+    /** Videos (nicht GIFs): ab hier abspielen ... */
+    var startMs = 0
+
+    /** ... und hier anhalten und [onFinished] melden; null = bis zum Ende. Nur ohne [looping]. */
+    var endMs: Int? = null
+
     var onFinished: (() -> Unit)? = null
     var onMediaSize: ((Int, Int) -> Unit)? = null
 
@@ -63,6 +69,24 @@ internal class IntroMediaView(context: Context) :
     private var prepared = false
     private var wantsPlaying = false
     private var videoTransform = Matrix()
+
+    /** Nach dem Spulen zur Startstelle erst dann losspielen, wenn das Bild dort ist. */
+    private var startAfterSeek = false
+
+    /** Prüft laufend, ob [endMs] erreicht ist (MediaPlayer kann nicht selbst an einer Stelle stoppen). */
+    private val endWatcher = object : Runnable {
+        override fun run() {
+            val mp = player ?: return
+            val end = endMs ?: return
+            if (prepared && mp.currentPosition >= end) {
+                mp.pause()
+                wantsPlaying = false
+                onFinished?.invoke()
+                return
+            }
+            postDelayed(this, 20)
+        }
+    }
     private var lifecycle: Lifecycle? = null
     private val visibleToUser get() = lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) == true
 
@@ -128,6 +152,8 @@ internal class IntroMediaView(context: Context) :
     }
 
     private fun releaseVideo() {
+        removeCallbacks(endWatcher)
+        startAfterSeek = false
         player?.release()
         player = null
         surface?.release()
@@ -157,7 +183,18 @@ internal class IntroMediaView(context: Context) :
         mp.setOnPreparedListener {
             prepared = true
             onPrepared?.invoke(it.duration)
-            if (wantsPlaying && visibleToUser) it.start()
+            if (startMs > 0 && !looping) {
+                startAfterSeek = true
+                it.seekTo(startMs.toLong(), MediaPlayer.SEEK_CLOSEST)
+            } else {
+                startPlayback()
+            }
+        }
+        mp.setOnSeekCompleteListener {
+            if (startAfterSeek) {
+                startAfterSeek = false
+                startPlayback()
+            }
         }
         mp.setOnCompletionListener {
             if (!looping) {
@@ -173,6 +210,15 @@ internal class IntroMediaView(context: Context) :
             mp.setDataSource(context, source)
             mp.prepareAsync()
         }.onFailure { onFinished?.invoke() }
+    }
+
+    private fun startPlayback() {
+        val mp = player ?: return
+        if (wantsPlaying && visibleToUser) mp.start()
+        if (!looping && endMs != null) {
+            removeCallbacks(endWatcher)
+            post(endWatcher)
+        }
     }
 
     private fun loadGif(source: Uri) {

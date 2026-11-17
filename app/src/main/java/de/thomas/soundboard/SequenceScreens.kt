@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -46,6 +47,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -56,7 +58,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -281,10 +282,16 @@ private fun GifPickerDialog(gifs: BoardViewModel, onPick: (Entry) -> Unit, onDis
     }
 }
 
+/** Letztes sicher anzeigbares Bild eines Videos der Länge [durationMs]. */
+private fun lastFrame(durationMs: Int) = (durationMs - 50).coerceAtLeast(0)
+
+private fun seconds(ms: Int) = String.format(java.util.Locale.GERMANY, "%.1f s", ms / 1000f)
+
 /**
  * Editor einer Startsequenz. Das Video liegt bildschirmfüllend genau so wie beim echten Start.
  * Ziehen verschiebt, zwei Finger zoomen, Tippen setzt den Startpunkt der Animation.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SequenceEditor(
     original: StartSequence,
@@ -297,7 +304,6 @@ fun SequenceEditor(
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     var mediaSize by remember { mutableStateOf(IntSize.Zero) }
     var duration by remember { mutableIntStateOf(0) }
-    var position by remember { mutableFloatStateOf(0f) }
     var playing by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
     var renaming by remember { mutableStateOf(false) }
@@ -337,11 +343,25 @@ fun SequenceEditor(
         )
     }
 
-    // Zeitleiste mitlaufen lassen, solange das Video spielt
+    // Ab hier läuft das Video, und hier beginnt die Animation (das Bild, auf dem man den Punkt setzt)
+    val videoStart = draft.startMs.coerceIn(0, duration.coerceAtLeast(0))
+    val revealAt = (draft.revealAtMs ?: lastFrame(duration)).coerceIn(videoStart, duration.coerceAtLeast(videoStart))
+
+    // Abspielen: nur den gewählten Abschnitt in Schleife; Pause springt zurück zum Animationsbeginn
     LaunchedEffect(playing) {
-        while (playing) {
-            position = (player[0]?.position ?: 0).toFloat()
-            delay(100)
+        val view = player[0] ?: return@LaunchedEffect
+        if (!playing) {
+            view.pause()
+            if (duration > 0) view.seekTo(revealAt)
+            return@LaunchedEffect
+        }
+        view.seekTo(draft.startMs)
+        view.play()
+        while (true) {
+            delay(30)
+            val end = draft.revealAtMs ?: lastFrame(duration)
+            val pos = view.position
+            if (pos >= end || pos < draft.startMs - 200) view.seekTo(draft.startMs)
         }
     }
 
@@ -354,12 +374,8 @@ fun SequenceEditor(
                     onMediaSize = { w, h -> mediaSize = IntSize(w, h) }
                     onPrepared = { d ->
                         duration = d
-                        // Am Ende anfangen: dort startet die Animation, dort setzt man den Punkt
-                        if (d > 0) {
-                            val end = (d - 50).coerceAtLeast(0)
-                            seekTo(end)
-                            position = end.toFloat()
-                        }
+                        // Beim Animationsbeginn anfangen: dort setzt man den Startpunkt
+                        if (d > 0) seekTo(draft.revealAtMs ?: lastFrame(d))
                     }
                     player[0] = this
                 }
@@ -441,39 +457,44 @@ fun SequenceEditor(
                         style = MaterialTheme.typography.bodySmall,
                     )
                     if (duration > 0) {
+                        Text(
+                            "Video ab ${seconds(videoStart)} · Animation ab ${seconds(revealAt)}" +
+                                if (draft.revealAtMs == null) " (Ende)" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = {
-                                if (playing) player[0]?.pause() else player[0]?.play()
-                                playing = !playing
-                            }) {
+                            IconButton(onClick = { playing = !playing }) {
                                 if (playing) {
                                     Icon(painterResource(R.drawable.ic_pause), contentDescription = "Pause")
                                 } else {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = "Abspielen")
+                                    Icon(Icons.Default.PlayArrow, contentDescription = "Abschnitt abspielen")
                                 }
                             }
-                            Slider(
-                                value = position.coerceIn(0f, duration.toFloat()),
-                                onValueChange = {
-                                    position = it
+                            // Linker Griff: Videostart, rechter Griff: Animationsbeginn
+                            RangeSlider(
+                                value = videoStart.toFloat()..revealAt.toFloat(),
+                                onValueChange = { range ->
+                                    val newStart = range.start.toInt()
+                                    val newReveal = range.endInclusive.toInt()
                                     playing = false
-                                    player[0]?.pause()
-                                    player[0]?.seekTo(it.toInt())
+                                    // das Bild am gerade gezogenen Griff zeigen
+                                    player[0]?.seekTo(if (newStart != videoStart) newStart else newReveal)
+                                    draft = draft.copy(
+                                        startMs = newStart,
+                                        // ganz rechts = "am Videoende", das bleibt auch bei anderer Videolänge richtig
+                                        revealAtMs = newReveal.takeIf { it < lastFrame(duration) },
+                                    )
                                 },
-                                valueRange = 0f..duration.toFloat(),
-                                modifier = Modifier.weight(1f),
+                                valueRange = 0f..lastFrame(duration).toFloat(),
+                                // nicht mit der Zurück-Wischgeste am Bildschirmrand kollidieren
+                                modifier = Modifier.weight(1f).padding(end = 12.dp).systemGestureExclusion(),
                             )
-                            TextButton(onClick = {
-                                playing = false
-                                player[0]?.pause()
-                                val end = (duration - 50).coerceAtLeast(0)
-                                player[0]?.seekTo(end)
-                                position = end.toFloat()
-                            }) { Text("Ende", color = Color.White) }
                         }
                     } else if (draft.isGif) {
                         Text(
-                            "Bei GIFs läuft die Vorschau hier in Schleife, Spulen geht nur bei Videos.",
+                            "Bei GIFs läuft die Vorschau hier in Schleife. Spulen sowie Start- und " +
+                                "Animationszeit gehen nur bei Videos.",
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(vertical = 8.dp),
                         )
@@ -496,7 +517,7 @@ fun SequenceEditor(
                             onValueChange = { reframe(it) },
                             valueRange = minZoom..Framing.MAX_ZOOM,
                             enabled = sizesKnown && minZoom < Framing.MAX_ZOOM,
-                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                            modifier = Modifier.weight(1f).padding(start = 8.dp, end = 12.dp).systemGestureExclusion(),
                         )
                     }
                     Row {

@@ -136,6 +136,8 @@ fun StartAnimation(
                     },
                     update = {
                         it.framing = sequence.framing
+                        it.startMs = sequence.startMs
+                        it.endMs = sequence.revealAtMs
                         it.setSource(videoUri, sequence.isGif)
                     },
                     onRelease = {

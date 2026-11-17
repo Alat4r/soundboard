@@ -16,11 +16,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** Zustand des Sounds-Reiters. */
+class SoundsViewModel(app: Application) : BoardViewModel(app, MediaKind.SOUND)
+
+/** Zustand des GIFs-Reiters. */
+class GifsViewModel(app: Application) : BoardViewModel(app, MediaKind.GIF)
+
 /**
- * Hält den Zustand des Bildschirms (Speicherordner, geöffneter Unterordner,
+ * Hält den Zustand eines Reiters (Speicherordner, geöffneter Unterordner,
  * Inhalt, gerade spielender Sound, Meldungen). Überlebt Bildschirmdrehungen.
  */
-class SoundboardViewModel(app: Application) : AndroidViewModel(app) {
+abstract class BoardViewModel(app: Application, val kind: MediaKind) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private val player = SoundPlayer()
@@ -40,11 +46,11 @@ class SoundboardViewModel(app: Application) : AndroidViewModel(app) {
 
     val currentFolder: Entry? get() = path.lastOrNull() ?: library?.root
 
-    private fun loadLibrary(): SoundLibrary? {
-        val uri = prefs.getString(KEY_TREE_URI, null)?.toUri() ?: return null
+    private fun loadLibrary(): MediaLibrary? {
+        val uri = prefs.getString(kind.prefsKey, null)?.toUri() ?: return null
         val granted = getApplication<Application>().contentResolver.persistedUriPermissions
             .any { it.uri == uri && it.isReadPermission && it.isWritePermission }
-        return if (granted) runCatching { SoundLibrary(getApplication(), uri) }.getOrNull() else null
+        return if (granted) runCatching { MediaLibrary(getApplication(), uri, kind) }.getOrNull() else null
     }
 
     fun setRoot(treeUri: Uri) {
@@ -52,18 +58,20 @@ class SoundboardViewModel(app: Application) : AndroidViewModel(app) {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         app.contentResolver.takePersistableUriPermission(treeUri, flags)
         library?.treeUri?.takeIf { it != treeUri }?.let { old ->
-            runCatching { app.contentResolver.releasePersistableUriPermission(old, flags) }
+            // Freigabe nur zurückgeben, wenn der andere Reiter nicht denselben Ordner nutzt
+            val usedElsewhere = MediaKind.entries.any { it != kind && prefs.getString(it.prefsKey, null) == old.toString() }
+            if (!usedElsewhere) runCatching { app.contentResolver.releasePersistableUriPermission(old, flags) }
         }
-        prefs.edit { putString(KEY_TREE_URI, treeUri.toString()) }
+        prefs.edit { putString(kind.prefsKey, treeUri.toString()) }
 
         stopPlayback()
         closeSearch()
-        val lib = SoundLibrary(app, treeUri)
+        val lib = MediaLibrary(app, treeUri, kind)
         library = lib
         path = emptyList()
         entries = emptyList()
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { migrateOldSounds(lib) }
+            if (kind == MediaKind.SOUND) withContext(Dispatchers.IO) { migrateOldSounds(lib) }
             if (pendingImports.isNotEmpty()) {
                 importAll(pendingImports)
                 pendingImports = emptyList()
@@ -74,7 +82,7 @@ class SoundboardViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Die erste Version der App hat Sounds im privaten Speicher abgelegt: in den neuen Ordner umziehen. */
-    private fun migrateOldSounds(lib: SoundLibrary) {
+    private fun migrateOldSounds(lib: MediaLibrary) {
         val oldDir = File(getApplication<Application>().filesDir, "sounds")
         oldDir.listFiles()?.forEach { file ->
             if (runCatching { lib.importFile(lib.root, file) }.getOrDefault(false)) file.delete()
@@ -131,8 +139,8 @@ class SoundboardViewModel(app: Application) : AndroidViewModel(app) {
             val failed = uris.size - imported
             message = when {
                 failed > 0 -> "$failed Datei(en) konnten nicht importiert werden"
-                imported == 1 -> "1 Sound hinzugefügt"
-                else -> "$imported Sounds hinzugefügt"
+                imported == 1 -> "1 ${kind.singular} hinzugefügt"
+                else -> "$imported ${kind.plural} hinzugefügt"
             }
         }
     }
@@ -214,7 +222,7 @@ class SoundboardViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Führt eine Dateioperation im Hintergrund aus und lädt danach den Ordner neu. */
-    private fun modify(errorMessage: String, successMessage: String? = null, action: (SoundLibrary) -> Boolean) {
+    private fun modify(errorMessage: String, successMessage: String? = null, action: (MediaLibrary) -> Boolean) {
         val lib = library ?: return
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) { runCatching { action(lib) }.getOrDefault(false) }
@@ -241,16 +249,12 @@ class SoundboardViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun stopPlayback() {
+    fun stopPlayback() {
         player.stop()
         playing = null
     }
 
     override fun onCleared() {
         player.stop()
-    }
-
-    private companion object {
-        const val KEY_TREE_URI = "tree_uri"
     }
 }

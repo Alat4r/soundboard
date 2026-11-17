@@ -9,6 +9,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -87,10 +92,12 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SoundboardScreen(vm: SoundboardViewModel) {
+fun BoardScreen(vm: BoardViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    val kind = vm.kind
+    var viewing by remember { mutableStateOf<Entry?>(null) }
     var renaming by remember { mutableStateOf<Entry?>(null) }
     var deleting by remember { mutableStateOf<Entry?>(null) }
     var moving by remember { mutableStateOf<Entry?>(null) }
@@ -127,7 +134,17 @@ fun SoundboardScreen(vm: SoundboardViewModel) {
         }
     }
 
+    val share: (Entry) -> Unit = { entry ->
+        scope.launch {
+            runCatching { shareFile(context, vm.copyForSharing(entry)) }
+                .onFailure { vm.message = "Teilen fehlgeschlagen" }
+        }
+    }
+
     Scaffold(
+        modifier = modifier,
+        // Systemleisten-Abstände kommen schon von außen (Reiter-Leiste)
+        contentWindowInsets = WindowInsets(0),
         topBar = {
             if (searching) {
                 SearchBar(
@@ -138,7 +155,7 @@ fun SoundboardScreen(vm: SoundboardViewModel) {
             } else {
                 TopAppBar(
                     title = {
-                        Text(vm.currentFolder?.title ?: "Soundboard", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(vm.currentFolder?.title ?: kind.plural, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     },
                     navigationIcon = {
                         if (vm.path.isNotEmpty()) {
@@ -177,8 +194,8 @@ fun SoundboardScreen(vm: SoundboardViewModel) {
         },
         floatingActionButton = {
             if (hasLibrary && !searching) {
-                FloatingActionButton(onClick = { filePicker.launch(arrayOf("audio/*")) }) {
-                    Icon(Icons.Default.Add, contentDescription = "Sounds hinzufügen")
+                FloatingActionButton(onClick = { filePicker.launch(kind.pickerMimeTypes) }) {
+                    Icon(Icons.Default.Add, contentDescription = "${kind.plural} hinzufügen")
                 }
             }
         },
@@ -188,7 +205,7 @@ fun SoundboardScreen(vm: SoundboardViewModel) {
         // In der Suche Treffer aus allen Ordnern, sonst der Inhalt des geöffneten Ordners
         val hits = if (searching) results.orEmpty() else vm.entries.map { SearchHit(it, vm.path) }
         when {
-            !hasLibrary -> SetupHint(Modifier.padding(padding), onPick = { folderPicker.launch(null) })
+            !hasLibrary -> SetupHint(kind, Modifier.padding(padding), onPick = { folderPicker.launch(null) })
 
             searching && results == null -> CenteredText("Durchsuche Ordner…", Modifier.padding(padding))
 
@@ -196,9 +213,16 @@ fun SoundboardScreen(vm: SoundboardViewModel) {
 
             hits.isEmpty() -> CenteredText(
                 if (vm.path.isEmpty()) {
-                    "Noch keine Sounds.\n\nTippe auf +, um MP3- oder Opus-Dateien hinzuzufügen, " +
-                        "teile eine Sprachnachricht aus WhatsApp an diese App " +
-                        "oder kopiere Dateien und Ordner am PC in den Speicherordner."
+                    when (kind) {
+                        MediaKind.SOUND ->
+                            "Noch keine Sounds.\n\nTippe auf +, um MP3- oder Opus-Dateien hinzuzufügen, " +
+                                "teile eine Sprachnachricht aus WhatsApp an diese App " +
+                                "oder kopiere Dateien und Ordner am PC in den Speicherordner."
+                        MediaKind.GIF ->
+                            "Noch keine GIFs.\n\nTippe auf +, um GIFs oder kurze MP4-Videos hinzuzufügen, " +
+                                "teile sie aus einer anderen App an diese App " +
+                                "oder kopiere Dateien und Ordner am PC in den Speicherordner."
+                    }
                 } else {
                     "Dieser Ordner ist leer."
                 },
@@ -217,6 +241,7 @@ fun SoundboardScreen(vm: SoundboardViewModel) {
                     val entry = hit.entry
                     EntryCard(
                         entry = entry,
+                        kind = kind,
                         isPlaying = vm.playing == entry.uri,
                         // in der Suche zeigen, wo der Treffer liegt
                         subtitle = if (searching) {
@@ -226,17 +251,13 @@ fun SoundboardScreen(vm: SoundboardViewModel) {
                         },
                         onTap = {
                             when {
-                                !entry.isFolder -> vm.togglePlay(entry)
-                                searching -> vm.openSearchHit(hit)
-                                else -> vm.openFolder(entry)
+                                entry.isFolder && searching -> vm.openSearchHit(hit)
+                                entry.isFolder -> vm.openFolder(entry)
+                                kind == MediaKind.SOUND -> vm.togglePlay(entry)
+                                else -> viewing = entry
                             }
                         },
-                        onShare = {
-                            scope.launch {
-                                runCatching { shareSound(context, vm.copyForSharing(entry)) }
-                                    .onFailure { vm.message = "Teilen fehlgeschlagen" }
-                            }
-                        },
+                        onShare = { share(entry) },
                         onRename = { renaming = entry },
                         onMove = { moving = entry },
                         onSetCover = {
@@ -249,6 +270,10 @@ fun SoundboardScreen(vm: SoundboardViewModel) {
                 }
             }
         }
+    }
+
+    viewing?.let { entry ->
+        MediaViewer(entry, onShare = { share(entry) }, onDismiss = { viewing = null })
     }
 
     if (creatingFolder) {
@@ -327,16 +352,20 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, onClose: (
 }
 
 @Composable
-private fun SetupHint(modifier: Modifier, onPick: () -> Unit) {
+private fun SetupHint(kind: MediaKind, modifier: Modifier, onPick: () -> Unit) {
+    val (what, parent, folder) = when (kind) {
+        MediaKind.SOUND -> Triple("deine Sounds", "Music", "Soundboard")
+        MediaKind.GIF -> Triple("deine GIFs und kurzen Videos", "Pictures", "GIFs")
+    }
     Column(
         modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            "Wähle einen Ordner auf deinem Handy, in dem deine Sounds liegen sollen.\n\n" +
-                "Tipp: Lege im Auswahldialog z. B. unter „Music“ einen neuen Ordner " +
-                "„Soundboard“ an. Unterordner darin erscheinen in der App als Ordner. " +
+            "Wähle einen Ordner auf deinem Handy, in dem $what liegen sollen.\n\n" +
+                "Tipp: Lege im Auswahldialog z. B. unter „$parent“ einen neuen Ordner " +
+                "„$folder“ an. Unterordner darin erscheinen in der App als Ordner. " +
                 "Du kannst sie auch am PC anlegen und befüllen.",
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodyLarge,
@@ -356,6 +385,7 @@ private fun CenteredText(text: String, modifier: Modifier) {
 @Composable
 private fun EntryCard(
     entry: Entry,
+    kind: MediaKind,
     isPlaying: Boolean,
     subtitle: String?,
     onTap: () -> Unit,
@@ -368,7 +398,10 @@ private fun EntryCard(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
-    val hasCover = entry.cover != null
+    // GIFs/Videos zeigen sich selbst als loopende Vorschau, gestaltet wie ein Coverbild
+    val animated = !entry.isFolder && kind == MediaKind.GIF
+    val hasCover = entry.cover != null || animated
+    val canHaveCover = entry.isFolder || kind.fileCovers
 
     Box {
         Card(
@@ -389,7 +422,8 @@ private fun EntryCard(
         ) {
             Box(Modifier.fillMaxSize()) {
                 if (hasCover) {
-                    CoverImage(entry, Modifier.matchParentSize())
+                    if (animated) AnimatedPreview(entry, crop = true, Modifier.matchParentSize())
+                    else CoverImage(entry, Modifier.matchParentSize())
                     // dunkler Verlauf nach unten, damit die Schrift auf jedem Bild lesbar bleibt
                     Box(
                         Modifier.matchParentSize().background(
@@ -462,12 +496,14 @@ private fun EntryCard(
                 leadingIcon = { Icon(painterResource(R.drawable.ic_move), contentDescription = null) },
                 onClick = { menuOpen = false; onMove() },
             )
-            DropdownMenuItem(
-                text = { Text(if (hasCover) "Coverbild ändern" else "Coverbild festlegen") },
-                leadingIcon = { Icon(painterResource(R.drawable.ic_image), contentDescription = null) },
-                onClick = { menuOpen = false; onSetCover() },
-            )
-            if (hasCover) {
+            if (canHaveCover) {
+                DropdownMenuItem(
+                    text = { Text(if (entry.cover != null) "Coverbild ändern" else "Coverbild festlegen") },
+                    leadingIcon = { Icon(painterResource(R.drawable.ic_image), contentDescription = null) },
+                    onClick = { menuOpen = false; onSetCover() },
+                )
+            }
+            if (canHaveCover && entry.cover != null) {
                 DropdownMenuItem(
                     text = { Text("Coverbild entfernen") },
                     leadingIcon = { Icon(Icons.Default.Clear, contentDescription = null) },
@@ -479,6 +515,44 @@ private fun EntryCard(
                 leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                 onClick = { menuOpen = false; onDelete() },
             )
+        }
+    }
+}
+
+/** Großansicht eines GIFs/Videos. Tippen irgendwo oder Zurück schließt sie. */
+@Composable
+private fun MediaViewer(entry: Entry, onShare: () -> Unit, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
+        ) {
+            AnimatedPreview(entry, crop = false, Modifier.fillMaxSize())
+            CompositionLocalProvider(LocalContentColor provides Color.White) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Schließen")
+                    }
+                    Text(
+                        entry.title,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    IconButton(onClick = onShare) {
+                        Icon(Icons.Default.Share, contentDescription = "Teilen")
+                    }
+                }
+            }
         }
     }
 }
@@ -497,7 +571,7 @@ private fun CoverImage(entry: Entry, modifier: Modifier) {
 
 /** Ordner-Browser zur Auswahl des Ziels beim Verschieben. */
 @Composable
-private fun MoveDialog(entry: Entry, vm: SoundboardViewModel, onDismiss: () -> Unit) {
+private fun MoveDialog(entry: Entry, vm: BoardViewModel, onDismiss: () -> Unit) {
     val root = vm.library?.root ?: return
     var stack by remember { mutableStateOf(listOf(root)) }
     val folder = stack.last()

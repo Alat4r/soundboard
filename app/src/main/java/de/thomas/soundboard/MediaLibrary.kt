@@ -13,7 +13,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.InputStream
 
-/** Ein Eintrag im Speicherordner: entweder ein Unterordner oder eine Audiodatei. */
+/** Ein Eintrag im Speicherordner: entweder ein Unterordner oder eine Mediendatei (Sound bzw. GIF/Video). */
 data class Entry(
     val uri: Uri,
     val name: String,
@@ -25,9 +25,10 @@ data class Entry(
     /** Änderungszeit des Coverbilds, damit ein ersetztes Bild neu geladen wird. */
     val coverStamp: Long = 0,
 ) {
-    /** Angezeigter Name: bei Sounds ohne Dateiendung. */
+    /** Angezeigter Name: bei Dateien ohne Endung. */
     val title: String get() = if (isFolder) name else name.substringBeforeLast('.')
     val extension: String get() = name.substringAfterLast('.', "").lowercase()
+    val isGif: Boolean get() = !isFolder && extension == "gif"
 }
 
 /** Ein Suchtreffer samt der Ordner, die über ihm liegen (ohne den Speicherordner selbst). */
@@ -35,10 +36,10 @@ data class SearchHit(val entry: Entry, val ancestors: List<Entry>)
 
 /**
  * Zugriff auf den vom Nutzer gewählten Speicherordner (Storage Access Framework).
- * Unterordner erscheinen in der App als Ordner, Audiodateien als Sounds.
+ * Unterordner erscheinen in der App als Ordner, passende Dateien (je nach [kind]) als Kacheln.
  * Die Dateien sind ganz normal im Handyspeicher sichtbar, z. B. am PC im Explorer.
  */
-class SoundLibrary(private val context: Context, val treeUri: Uri) {
+class MediaLibrary(private val context: Context, val treeUri: Uri, private val kind: MediaKind) {
 
     private val resolver = context.contentResolver
 
@@ -85,8 +86,8 @@ class SoundLibrary(private val context: Context, val treeUri: Uri) {
                         .firstOrNull { it.name.lowercase() in FOLDER_COVER_NAMES }
                     Entry(kid.uri, kid.name, true, folder.uri, cover?.uri, cover?.modified ?: 0)
                 }
-                isAudio(kid.name, kid.mime) -> {
-                    val cover = images[kid.baseName]
+                kind.matches(kid.name, kid.mime) -> {
+                    val cover = if (kind.fileCovers) images[kid.baseName] else null
                     Entry(kid.uri, kid.name, false, folder.uri, cover?.uri, cover?.modified ?: 0)
                 }
                 else -> null
@@ -94,7 +95,7 @@ class SoundLibrary(private val context: Context, val treeUri: Uri) {
         }.sortedWith(compareBy({ !it.isFolder }, { it.title.lowercase() }))
     }
 
-    /** Alle Ordner und Sounds unterhalb des Speicherordners, für die Suche. */
+    /** Alle Ordner und Dateien unterhalb des Speicherordners, für die Suche. */
     fun walk(folder: Entry = root, ancestors: List<Entry> = emptyList()): List<SearchHit> =
         list(folder).flatMap { entry ->
             val hit = SearchHit(entry, ancestors)
@@ -213,13 +214,7 @@ class SoundLibrary(private val context: Context, val treeUri: Uri) {
     private fun sanitize(name: String): String =
         name.replace(Regex("""[\\/:*?"<>|\p{Cntrl}]"""), "_").trim().take(80)
 
-    private fun isAudio(name: String, mime: String?): Boolean =
-        mime?.startsWith("audio/") == true ||
-            mime == "application/ogg" ||
-            name.substringAfterLast('.', "").lowercase() in AUDIO_EXTENSIONS
-
     private companion object {
-        val AUDIO_EXTENSIONS = setOf("mp3", "opus", "ogg", "oga", "m4a", "aac", "wav", "amr", "flac")
         const val FOLDER_COVER = "folder.jpg"
         val FOLDER_COVER_NAMES = setOf("folder.jpg", "folder.jpeg", "folder.png", "folder.webp")
     }
@@ -229,16 +224,19 @@ fun mimeTypeFor(file: File): String = when (file.extension.lowercase()) {
     "mp3" -> "audio/mpeg"
     // WhatsApp-Sprachnachrichten sind Opus-in-Ogg
     "opus", "ogg", "oga" -> "audio/ogg"
-    "m4a", "mp4" -> "audio/mp4"
+    "m4a" -> "audio/mp4"
     "aac" -> "audio/aac"
     "wav" -> "audio/wav"
     "amr" -> "audio/amr"
     "flac" -> "audio/flac"
-    else -> "audio/*"
+    "gif" -> "image/gif"
+    "mp4" -> "video/mp4"
+    "webm" -> "video/webm"
+    else -> "application/octet-stream"
 }
 
-/** Öffnet das Android-Teilen-Menü für einen Sound. */
-fun shareSound(context: Context, file: File) {
+/** Öffnet das Android-Teilen-Menü für einen Sound oder ein GIF. */
+fun shareFile(context: Context, file: File) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val send = Intent(Intent.ACTION_SEND).apply {
         type = mimeTypeFor(file)

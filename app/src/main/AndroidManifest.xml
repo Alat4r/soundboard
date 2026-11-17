@@ -5,7 +5,7 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.Soundboard">
 
         <activity
             android:name=".MainActivity"
@@ -15,16 +15,20 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Audiodateien aus anderen Apps (z. B. WhatsApp-Sprachnachrichten) importieren -->
+            <!-- Dateien aus anderen Apps importieren: Audio (z. B. WhatsApp-Sprachnachrichten), GIFs und Videos -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="audio/*" />
+                <data android:mimeType="image/gif" />
+                <data android:mimeType="video/*" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="audio/*" />
+                <data android:mimeType="image/gif" />
+                <data android:mimeType="video/*" />
             </intent-filter>
         </activity>
 

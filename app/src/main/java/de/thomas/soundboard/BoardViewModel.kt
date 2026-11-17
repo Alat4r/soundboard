@@ -216,6 +216,11 @@ abstract class BoardViewModel(app: Application, val kind: MediaKind) : AndroidVi
         }
     }
 
+    /** Inhalt von [folder], z. B. für die Videoauswahl der Startsequenzen. */
+    suspend fun listEntries(folder: Entry): List<Entry> = withContext(Dispatchers.IO) {
+        runCatching { library?.list(folder).orEmpty() }.getOrDefault(emptyList())
+    }
+
     /** Unterordner von [folder], für den Verschieben-Dialog. */
     suspend fun listFolders(folder: Entry): List<Entry> = withContext(Dispatchers.IO) {
         runCatching { library?.list(folder).orEmpty().filter { it.isFolder } }.getOrDefault(emptyList())

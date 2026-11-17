@@ -70,7 +70,7 @@ private fun VideoPreview(uri: Uri, crop: Boolean, modifier: Modifier) {
 }
 
 /** Lädt ein GIF als animiertes Drawable (ab Android 9), sonst nur das erste Bild. */
-private fun loadAnimated(context: Context, uri: Uri, maxSize: Int): Drawable {
+internal fun loadAnimated(context: Context, uri: Uri, maxSize: Int): Drawable {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         val drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
             val scale = maxSize.toFloat() / maxOf(info.size.width, info.size.height)

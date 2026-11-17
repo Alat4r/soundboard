@@ -22,6 +22,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -37,23 +38,57 @@ class MainActivity : ComponentActivity() {
     private val gifs: GifsViewModel by viewModels()
     private fun boardFor(kind: MediaKind): BoardViewModel = if (kind == MediaKind.SOUND) sounds else gifs
 
+    private val intro: IntroViewModel by viewModels()
+
     /** Der gerade sichtbare Reiter. */
     private var tab by mutableStateOf(MediaKind.SOUND)
+
+    /** Welcher Bildschirm gerade zu sehen ist: die Reiter, die Startsequenzen oder der Editor. */
+    private var screen by mutableStateOf(SCREEN_BOARDS)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         savedInstanceState?.getString(KEY_TAB)?.let { tab = MediaKind.valueOf(it) }
+        savedInstanceState?.getString(KEY_SCREEN)?.let { screen = it }
         // Nur beim ersten Start importieren, nicht nochmal nach einer Bildschirmdrehung
         if (savedInstanceState == null) handleIncomingShare(intent)
         // Startanimation nur beim normalen Start über das App-Icon, nicht beim Teilen in die App
-        val playIntro = savedInstanceState == null && intent.action == Intent.ACTION_MAIN
+        val introSequence = if (savedInstanceState == null && intent.action == Intent.ACTION_MAIN) intro.active else null
         setContent {
             SoundboardTheme {
-                StartAnimation(enabled = playIntro) {
-                    App()
+                StartAnimation(introSequence, introSequence?.let(intro::uriFor)) {
+                    Screens()
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun Screens() {
+        val current = screen
+        when {
+            current == SCREEN_SEQUENCES -> SequenceListScreen(
+                intro = intro,
+                gifs = gifs,
+                onEdit = { screen = EDITOR_PREFIX + it.id },
+                onBack = { screen = SCREEN_BOARDS },
+            )
+            current.startsWith(EDITOR_PREFIX) -> {
+                val sequence = intro.find(current.removePrefix(EDITOR_PREFIX))
+                if (sequence == null) {
+                    LaunchedEffect(Unit) { screen = SCREEN_SEQUENCES }
+                } else {
+                    SequenceEditor(
+                        original = sequence,
+                        videoUri = intro.uriFor(sequence),
+                        onSave = intro::save,
+                        onClose = { screen = SCREEN_SEQUENCES },
+                        previewContent = { App() },
+                    )
+                }
+            }
+            else -> App()
         }
     }
 
@@ -81,7 +116,14 @@ class MainActivity : ComponentActivity() {
         ) { padding ->
             // key: jeder Reiter hat seine eigenen Dialoge und Scrollposition
             key(tab) {
-                BoardScreen(boardFor(tab), Modifier.padding(padding))
+                BoardScreen(
+                    boardFor(tab),
+                    onOpenSequences = {
+                        sounds.stopPlayback()
+                        screen = SCREEN_SEQUENCES
+                    },
+                    modifier = Modifier.padding(padding),
+                )
             }
         }
     }
@@ -94,6 +136,7 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(KEY_TAB, tab.name)
+        outState.putString(KEY_SCREEN, screen)
     }
 
     override fun onResume() {
@@ -122,12 +165,17 @@ class MainActivity : ComponentActivity() {
             .forEach { (kind, kindUris) ->
                 if (kind == null) return@forEach
                 boardFor(kind).importAll(kindUris)
+                screen = SCREEN_BOARDS
                 switchTo(kind)
             }
     }
 
     private companion object {
         const val KEY_TAB = "tab"
+        const val KEY_SCREEN = "screen"
+        const val SCREEN_BOARDS = "boards"
+        const val SCREEN_SEQUENCES = "sequences"
+        const val EDITOR_PREFIX = "editor:"
     }
 }
 

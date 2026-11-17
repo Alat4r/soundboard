@@ -92,7 +92,7 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BoardScreen(vm: BoardViewModel, modifier: Modifier = Modifier) {
+fun BoardScreen(vm: BoardViewModel, onOpenSequences: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -184,6 +184,10 @@ fun BoardScreen(vm: BoardViewModel, modifier: Modifier = Modifier) {
                                     DropdownMenuItem(
                                         text = { Text("Speicherordner ändern") },
                                         onClick = { overflowOpen = false; folderPicker.launch(null) },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Startsequenzen") },
+                                        onClick = { overflowOpen = false; onOpenSequences() },
                                     )
                                 }
                             }
@@ -643,7 +647,7 @@ private fun FolderRow(text: String, icon: @Composable () -> Unit, onClick: () ->
 }
 
 @Composable
-private fun NameDialog(title: String, initial: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun NameDialog(title: String, initial: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
     var text by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,

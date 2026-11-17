@@ -308,6 +308,35 @@ fun SequenceEditor(
     val leave = { if (draft != original) confirmLeave = true else onClose() }
     BackHandler { leave() }
 
+    val sizesKnown = mediaSize != IntSize.Zero && viewSize != IntSize.Zero
+    // Wie weit man herauszoomen kann, bis das ganze Video (mit schwarzen Rändern) zu sehen ist
+    val minZoom = if (sizesKnown) {
+        Framing.minZoom(
+            viewSize.width.toFloat(), viewSize.height.toFloat(),
+            mediaSize.width.toFloat(), mediaSize.height.toFloat(),
+        )
+    } else {
+        1f
+    }
+
+    /** Neuer Ausschnitt nach Zoom-Änderung und/oder Verschieben um [dx]/[dy] Pixel. */
+    fun reframe(zoom: Float, dx: Float = 0f, dy: Float = 0f) {
+        if (!sizesKnown) return
+        val f = draft.framing
+        val newZoom = zoom.coerceIn(minZoom, Framing.MAX_ZOOM)
+        val p = Framing(newZoom, f.panX, f.panY).place(
+            viewSize.width.toFloat(), viewSize.height.toFloat(),
+            mediaSize.width.toFloat(), mediaSize.height.toFloat(),
+        )
+        // excess > 0: Video ragt über den Rand (Ausschnitt wählen),
+        // excess < 0: Video ist kleiner (innerhalb der schwarzen Ränder verschieben)
+        fun pan(old: Float, delta: Float, excess: Float) =
+            if (kotlin.math.abs(excess) > 1f) (old - delta / excess).coerceIn(0f, 1f) else 0.5f
+        draft = draft.copy(
+            framing = Framing(newZoom, pan(f.panX, dx, p.excessX), pan(f.panY, dy, p.excessY)),
+        )
+    }
+
     // Zeitleiste mitlaufen lassen, solange das Video spielt
     LaunchedEffect(playing) {
         while (playing) {
@@ -349,20 +378,7 @@ fun SequenceEditor(
                 .fillMaxSize()
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
-                        if (mediaSize == IntSize.Zero || viewSize == IntSize.Zero) return@detectTransformGestures
-                        val f = draft.framing
-                        val newZoom = (f.zoom * zoom).coerceIn(1f, 5f)
-                        val p = Framing(newZoom, f.panX, f.panY).place(
-                            viewSize.width.toFloat(), viewSize.height.toFloat(),
-                            mediaSize.width.toFloat(), mediaSize.height.toFloat(),
-                        )
-                        draft = draft.copy(
-                            framing = Framing(
-                                zoom = newZoom,
-                                panX = if (p.excessX > 0f) (f.panX - pan.x / p.excessX).coerceIn(0f, 1f) else 0.5f,
-                                panY = if (p.excessY > 0f) (f.panY - pan.y / p.excessY).coerceIn(0f, 1f) else 0.5f,
-                            ),
-                        )
+                        reframe(draft.framing.zoom * zoom, pan.x, pan.y)
                     }
                 }
                 .pointerInput(Unit) {
@@ -472,9 +488,23 @@ fun SequenceEditor(
                             )
                         }
                     }
+                    // Größe: links ganzes Video mit Rändern, Mitte randlos, rechts hineingezoomt
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Größe", style = MaterialTheme.typography.bodySmall)
+                        Slider(
+                            value = draft.framing.zoom.coerceIn(minZoom, Framing.MAX_ZOOM),
+                            onValueChange = { reframe(it) },
+                            valueRange = minZoom..Framing.MAX_ZOOM,
+                            enabled = sizesKnown && minZoom < Framing.MAX_ZOOM,
+                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                        )
+                    }
                     Row {
+                        TextButton(onClick = { draft = draft.copy(framing = Framing(zoom = minZoom)) }) {
+                            Text("Ganz zeigen", color = Color.White)
+                        }
                         TextButton(onClick = { draft = draft.copy(framing = Framing()) }) {
-                            Text("Ausschnitt zurücksetzen", color = Color.White)
+                            Text("Ausfüllen", color = Color.White)
                         }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = { controlsVisible = false }) {

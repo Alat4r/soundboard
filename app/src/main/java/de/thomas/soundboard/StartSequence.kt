@@ -30,11 +30,24 @@ enum class RevealStyle(val label: String) {
 }
 
 /**
- * Bildausschnitt des Videos. Das Video füllt den Bildschirm immer randlos aus;
- * [zoom] vergrößert zusätzlich, [panX]/[panY] wählen den sichtbaren Teil
- * (0 = linker/oberer Rand des Videos sichtbar, 0.5 = mittig, 1 = rechter/unterer Rand).
+ * Bildausschnitt des Videos. [zoom] = 1 füllt den Bildschirm genau randlos aus,
+ * größer schneidet mehr ab, kleiner (bis [minZoom]) lässt schwarze Ränder zu.
+ * [panX]/[panY] wählen die Lage: 0 = linker/oberer Rand, 0.5 = mittig, 1 = rechter/unterer Rand.
+ * Ist das Video kleiner als der Bildschirm, verschieben sie es innerhalb der Ränder.
  */
 data class Framing(val zoom: Float = 1f, val panX: Float = 0.5f, val panY: Float = 0.5f) {
+
+    companion object {
+        const val MAX_ZOOM = 5f
+
+        /** Kleinster Zoom: das ganze Video ist sichtbar (mit Rändern in einer Richtung). */
+        fun minZoom(viewWidth: Float, viewHeight: Float, mediaWidth: Float, mediaHeight: Float): Float {
+            val fit = minOf(viewWidth / mediaWidth, viewHeight / mediaHeight)
+            val fill = maxOf(viewWidth / mediaWidth, viewHeight / mediaHeight)
+            return fit / fill
+        }
+    }
+
     fun place(viewWidth: Float, viewHeight: Float, mediaWidth: Float, mediaHeight: Float): Placement {
         val scale = maxOf(viewWidth / mediaWidth, viewHeight / mediaHeight) * zoom
         val excessX = mediaWidth * scale - viewWidth

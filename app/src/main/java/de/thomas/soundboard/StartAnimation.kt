@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -55,12 +57,14 @@ private class ViewRef {
 /**
  * Startanimation: Erst läuft das Video der [sequence] einmal durch, dann öffnet sich
  * [content] mit dem gewählten Effekt, ausgehend vom Startpunkt. Antippen überspringt das Video.
+ * Ein optionaler Sound ([soundUri]) setzt an der gewählten Videostelle ein und spielt bis zu seinem Ende.
  * Ohne Sequenz wird [content] direkt gezeigt.
  */
 @Composable
 fun StartAnimation(
     sequence: StartSequence?,
     videoUri: Uri?,
+    soundUri: Uri? = null,
     onFinished: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
@@ -71,6 +75,23 @@ fun StartAnimation(
     val progress = remember { Animatable(0f) }
     val viewRef = remember { ViewRef() }
     val currentOnFinished by rememberUpdatedState(onFinished)
+    val context = LocalContext.current
+    val soundPlayer = remember { SoundPlayer() }
+    DisposableEffect(Unit) { onDispose { soundPlayer.stop() } }
+
+    // Sound starten, sobald das Video die gewählte Stelle erreicht (GIFs: sofort)
+    LaunchedEffect(phase == Phase.VIDEO) {
+        if (phase != Phase.VIDEO || sequence == null || soundUri == null) return@LaunchedEffect
+        val at = sequence.effectiveSoundAt(null)
+        while (true) {
+            val view = viewRef.view
+            if (sequence.isGif || (view != null && view.isPlaying && view.position >= at)) {
+                runCatching { soundPlayer.play(context, soundUri) {} }
+                break
+            }
+            delay(15)
+        }
+    }
 
     // Letztes Videobild festhalten: es bleibt stehen, während sich die App öffnet
     val startReveal = {

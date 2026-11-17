@@ -73,8 +73,19 @@ data class StartSequence(
     val startMs: Int = 0,
     /** Hier (ms) friert das Video ein und die Animation beginnt; null = am Videoende. */
     val revealAtMs: Int? = null,
+    /** Optionaler Sound: Dateiname der Kopie im App-Speicher und Anzeigename. */
+    val soundFile: String? = null,
+    val soundName: String? = null,
+    /** An dieser Stelle im Video (ms) setzt der Sound ein. */
+    val soundAtMs: Int = 0,
 ) {
     val isGif: Boolean get() = file.substringAfterLast('.').lowercase() == "gif"
+
+    /** Einsatz des Sounds, begrenzt auf den abgespielten Abschnitt des Videos. */
+    fun effectiveSoundAt(durationMs: Int?): Int {
+        val end = revealAtMs ?: durationMs ?: Int.MAX_VALUE
+        return soundAtMs.coerceIn(startMs, maxOf(startMs, end))
+    }
 }
 
 data class IntroState(val sequences: List<StartSequence>, val activeId: String?)
@@ -87,6 +98,14 @@ class StartSequenceStore(private val context: Context) {
 
     fun fileFor(sequence: StartSequence) = File(dir, sequence.file)
 
+    fun fileFor(name: String) = File(dir, name)
+
+    /** Löscht Kopien, die keine Sequenz mehr benutzt (z. B. ein ersetzter Sound). */
+    fun cleanup(state: IntroState) {
+        val used = state.sequences.flatMap { listOfNotNull(it.file, it.soundFile) }.toSet()
+        dir.listFiles()?.filter { it.name !in used }?.forEach { it.delete() }
+    }
+
     fun load(): IntroState =
         runCatching { if (json.exists()) parse(JSONObject(json.readText())) else null }.getOrNull() ?: seed()
 
@@ -94,7 +113,7 @@ class StartSequenceStore(private val context: Context) {
         json.writeText(toJson(state).toString(2))
     }
 
-    fun importVideo(input: InputStream, extension: String): String {
+    fun importFile(input: InputStream, extension: String): String {
         val name = "${UUID.randomUUID()}.$extension"
         File(dir, name).outputStream().use { input.copyTo(it) }
         return name
@@ -132,6 +151,9 @@ class StartSequenceStore(private val context: Context) {
                 style = runCatching { RevealStyle.valueOf(s.getString("style")) }.getOrDefault(RevealStyle.CIRCLE),
                 startMs = s.optInt("startMs", 0),
                 revealAtMs = if (s.has("revealAtMs") && !s.isNull("revealAtMs")) s.getInt("revealAtMs") else null,
+                soundFile = if (s.has("soundFile") && !s.isNull("soundFile")) s.getString("soundFile") else null,
+                soundName = if (s.has("soundName") && !s.isNull("soundName")) s.getString("soundName") else null,
+                soundAtMs = s.optInt("soundAtMs", 0),
             )
         }
         val active = if (obj.isNull("active")) null else obj.getString("active")
@@ -154,6 +176,9 @@ class StartSequenceStore(private val context: Context) {
                     put("style", s.style.name)
                     put("startMs", s.startMs)
                     put("revealAtMs", s.revealAtMs ?: JSONObject.NULL)
+                    put("soundFile", s.soundFile ?: JSONObject.NULL)
+                    put("soundName", s.soundName ?: JSONObject.NULL)
+                    put("soundAtMs", s.soundAtMs)
                 })
             }
         })
@@ -174,6 +199,15 @@ class IntroViewModel(app: Application) : AndroidViewModel(app) {
 
     fun uriFor(sequence: StartSequence): Uri = Uri.fromFile(store.fileFor(sequence))
 
+    fun soundUriFor(sequence: StartSequence): Uri? = sequence.soundFile?.let { Uri.fromFile(store.fileFor(it)) }
+
+    /** Kopiert eine Datei (z. B. einen Sound aus dem Sounds-Reiter) in den App-Speicher und gibt ihren Namen zurück. */
+    suspend fun importFile(entry: Entry): String = withContext(Dispatchers.IO) {
+        val input = getApplication<Application>().contentResolver.openInputStream(entry.uri)
+            ?: error("Datei nicht lesbar")
+        input.use { store.importFile(it, entry.extension.ifEmpty { "bin" }) }
+    }
+
     fun setActive(id: String?) = update(state.copy(activeId = id))
 
     fun save(sequence: StartSequence) =
@@ -191,12 +225,7 @@ class IntroViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Legt eine neue Sequenz mit einer Kopie von [entry] aus dem GIF-Reiter an. */
     suspend fun add(entry: Entry): StartSequence {
-        val file = withContext(Dispatchers.IO) {
-            val input = getApplication<Application>().contentResolver.openInputStream(entry.uri)
-                ?: error("Datei nicht lesbar")
-            input.use { store.importVideo(it, entry.extension.ifEmpty { "mp4" }) }
-        }
-        val sequence = StartSequence(UUID.randomUUID().toString(), entry.title, file)
+        val sequence = StartSequence(UUID.randomUUID().toString(), entry.title, importFile(entry))
         update(state.copy(sequences = state.sequences + sequence))
         return sequence
     }
@@ -204,5 +233,6 @@ class IntroViewModel(app: Application) : AndroidViewModel(app) {
     private fun update(newState: IntroState) {
         state = newState
         store.save(newState)
+        store.cleanup(newState)
     }
 }

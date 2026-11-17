@@ -56,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -71,6 +72,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -155,8 +157,8 @@ fun SequenceListScreen(
     }
 
     if (picking) {
-        GifPickerDialog(
-            gifs = gifs,
+        MediaPickerDialog(
+            board = gifs,
             onPick = { entry ->
                 picking = false
                 importing = true
@@ -189,15 +191,16 @@ fun SequenceListScreen(
     }
 }
 
-/** Auswahl eines GIFs/Videos aus dem GIF-Reiter, mit Ordnernavigation und loopender Vorschau. */
+/** Auswahl einer Datei aus dem GIF- oder Sounds-Reiter, mit Ordnernavigation (GIFs mit loopender Vorschau). */
 @Composable
-private fun GifPickerDialog(gifs: BoardViewModel, onPick: (Entry) -> Unit, onDismiss: () -> Unit) {
-    val root = gifs.library?.root
+private fun MediaPickerDialog(board: BoardViewModel, onPick: (Entry) -> Unit, onDismiss: () -> Unit) {
+    val isGifs = board.kind == MediaKind.GIF
+    val root = board.library?.root
     if (root == null) {
         AlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text("Kein GIF-Ordner") },
-            text = { Text("Richte zuerst im GIF-Reiter einen Speicherordner ein.") },
+            title = { Text(if (isGifs) "Kein GIF-Ordner" else "Kein Sound-Ordner") },
+            text = { Text("Richte zuerst im ${board.kind.plural}-Reiter einen Speicherordner ein.") },
             confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
         )
         return
@@ -206,7 +209,7 @@ private fun GifPickerDialog(gifs: BoardViewModel, onPick: (Entry) -> Unit, onDis
     var entries by remember { mutableStateOf<List<Entry>?>(null) }
     LaunchedEffect(stack.last()) {
         entries = null
-        entries = gifs.listEntries(stack.last())
+        entries = board.listEntries(stack.last())
     }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -214,7 +217,7 @@ private fun GifPickerDialog(gifs: BoardViewModel, onPick: (Entry) -> Unit, onDis
             Column {
                 Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Video wählen", style = MaterialTheme.typography.titleLarge)
+                        Text(if (isGifs) "Video wählen" else "Sound wählen", style = MaterialTheme.typography.titleLarge)
                         Text(
                             stack.joinToString(" / ") { it.title },
                             style = MaterialTheme.typography.bodySmall,
@@ -235,9 +238,12 @@ private fun GifPickerDialog(gifs: BoardViewModel, onPick: (Entry) -> Unit, onDis
                         Text("Eine Ebene hoch")
                     }
                 }
+                // Einmal lokal festhalten: beim Ordnerwechsel wird [entries] kurz null,
+                // und die Kachelliste darf dann nicht mehr darauf zugreifen
+                val shown = entries
                 when {
-                    entries == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                    entries!!.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    shown == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    shown.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
                         Text("Dieser Ordner ist leer.")
                     }
                     else -> LazyVerticalGrid(
@@ -246,13 +252,21 @@ private fun GifPickerDialog(gifs: BoardViewModel, onPick: (Entry) -> Unit, onDis
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(entries!!, key = { it.uri.toString() }) { entry ->
+                        items(shown, key = { it.uri.toString() }) { entry ->
                             if (entry.isFolder) {
                                 Card(onClick = { stack = stack + entry }, modifier = Modifier.height(96.dp)) {
                                     Row(Modifier.fillMaxSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Icon(painterResource(R.drawable.ic_folder), contentDescription = null)
                                         Spacer(Modifier.width(8.dp))
                                         Text(entry.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                            } else if (!isGifs) {
+                                Card(onClick = { onPick(entry) }, modifier = Modifier.height(96.dp)) {
+                                    Row(Modifier.fillMaxSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(painterResource(R.drawable.ic_music), contentDescription = null)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(entry.title, maxLines = 3, overflow = TextOverflow.Ellipsis)
                                     }
                                 }
                             } else {
@@ -295,12 +309,19 @@ private fun seconds(ms: Int) = String.format(java.util.Locale.GERMANY, "%.1f s",
 @Composable
 fun SequenceEditor(
     original: StartSequence,
-    videoUri: Uri,
-    onSave: (StartSequence) -> Unit,
+    intro: IntroViewModel,
+    sounds: BoardViewModel,
     onClose: () -> Unit,
     previewContent: @Composable () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val videoUri = remember(original.id) { intro.uriFor(original) }
+    val onSave: (StartSequence) -> Unit = { intro.save(it) }
     var draft by remember(original.id) { mutableStateOf(original) }
+    var pickingSound by remember { mutableStateOf(false) }
+    val soundPlayer = remember { SoundPlayer() }
+    DisposableEffect(Unit) { onDispose { soundPlayer.stop() } }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     var mediaSize by remember { mutableStateOf(IntSize.Zero) }
     var duration by remember { mutableIntStateOf(0) }
@@ -348,7 +369,9 @@ fun SequenceEditor(
     val revealAt = (draft.revealAtMs ?: lastFrame(duration)).coerceIn(videoStart, duration.coerceAtLeast(videoStart))
 
     // Abspielen: nur den gewählten Abschnitt in Schleife; Pause springt zurück zum Animationsbeginn
+    // Der Sound setzt dabei an seiner Stelle ein, wie beim echten Start
     LaunchedEffect(playing) {
+        soundPlayer.stop()
         val view = player[0] ?: return@LaunchedEffect
         if (!playing) {
             view.pause()
@@ -357,11 +380,22 @@ fun SequenceEditor(
         }
         view.seekTo(draft.startMs)
         view.play()
+        var soundStarted = false
         while (true) {
-            delay(30)
+            delay(20)
             val end = draft.revealAtMs ?: lastFrame(duration)
             val pos = view.position
-            if (pos >= end || pos < draft.startMs - 200) view.seekTo(draft.startMs)
+            if (pos >= end || pos < draft.startMs - 200) {
+                view.seekTo(draft.startMs)
+                soundPlayer.stop()
+                soundStarted = false
+                continue
+            }
+            val soundUri = intro.soundUriFor(draft)
+            if (soundUri != null && !soundStarted && pos >= draft.effectiveSoundAt(duration)) {
+                soundStarted = true
+                runCatching { soundPlayer.play(context, soundUri) {} }
+            }
         }
     }
 
@@ -499,6 +533,44 @@ fun SequenceEditor(
                             modifier = Modifier.padding(vertical = 8.dp),
                         )
                     }
+                    // Sound: auswählen, ersetzen, entfernen
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(painterResource(R.drawable.ic_music), contentDescription = null, modifier = Modifier.size(20.dp))
+                        Text(
+                            draft.soundName ?: "Kein Sound",
+                            modifier = Modifier.weight(1f).padding(start = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        TextButton(onClick = { playing = false; pickingSound = true }) {
+                            Text(if (draft.soundFile == null) "Sound wählen" else "Ändern", color = Color.White)
+                        }
+                        if (draft.soundFile != null) {
+                            IconButton(onClick = {
+                                playing = false
+                                draft = draft.copy(soundFile = null, soundName = null)
+                            }) {
+                                Icon(Icons.Default.Close, contentDescription = "Sound entfernen")
+                            }
+                        }
+                    }
+                    if (draft.soundFile != null && duration > 0 && revealAt > videoStart) {
+                        val soundAt = draft.effectiveSoundAt(duration)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Sound ab ${seconds(soundAt)}", style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = soundAt.toFloat(),
+                                onValueChange = {
+                                    playing = false
+                                    player[0]?.seekTo(it.toInt())
+                                    draft = draft.copy(soundAtMs = it.toInt())
+                                },
+                                valueRange = videoStart.toFloat()..revealAt.toFloat(),
+                                modifier = Modifier.weight(1f).padding(start = 8.dp, end = 12.dp).systemGestureExclusion(),
+                            )
+                        }
+                    }
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(RevealStyle.entries) { style ->
                             FilterChip(
@@ -557,6 +629,7 @@ fun SequenceEditor(
                 StartAnimation(
                     sequence = draft,
                     videoUri = videoUri,
+                    soundUri = intro.soundUriFor(draft),
                     onFinished = {
                         // App kurz zeigen, dann zurück in den Editor
                         scope.launch {
@@ -567,6 +640,21 @@ fun SequenceEditor(
                 ) { previewContent() }
             }
         }
+    }
+
+    if (pickingSound) {
+        MediaPickerDialog(
+            board = sounds,
+            onPick = { entry ->
+                pickingSound = false
+                scope.launch {
+                    val file = runCatching { intro.importFile(entry) }.getOrNull() ?: return@launch
+                    // Sound setzt zunächst mit dem Video ein
+                    draft = draft.copy(soundFile = file, soundName = entry.title, soundAtMs = draft.startMs)
+                }
+            },
+            onDismiss = { pickingSound = false },
+        )
     }
 
     if (renaming) {

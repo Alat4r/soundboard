@@ -57,7 +57,11 @@ class MainActivity : ComponentActivity() {
         val introSequence = if (savedInstanceState == null && intent.action == Intent.ACTION_MAIN) intro.active else null
         setContent {
             SoundboardTheme {
-                StartAnimation(introSequence, introSequence?.let(intro::uriFor)) {
+                StartAnimation(
+                    sequence = introSequence,
+                    videoUri = introSequence?.let(intro::uriFor),
+                    soundUri = introSequence?.let(intro::soundUriFor),
+                ) {
                     Screens()
                 }
             }
@@ -81,8 +85,8 @@ class MainActivity : ComponentActivity() {
                 } else {
                     SequenceEditor(
                         original = sequence,
-                        videoUri = intro.uriFor(sequence),
-                        onSave = intro::save,
+                        intro = intro,
+                        sounds = sounds,
                         onClose = { screen = SCREEN_SEQUENCES },
                         previewContent = { App() },
                     )

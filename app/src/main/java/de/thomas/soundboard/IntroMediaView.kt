@@ -92,6 +92,9 @@ internal class IntroMediaView(context: Context) :
 
     val position: Int get() = if (prepared && !isGif) player?.currentPosition ?: 0 else 0
 
+    /** Läuft das Video gerade (nach dem Laden und ggf. Spulen zur Startstelle)? */
+    val isPlaying: Boolean get() = prepared && !isGif && player?.isPlaying == true
+
     init {
         setBackgroundColor(Color.BLACK)
         texture.surfaceTextureListener = this

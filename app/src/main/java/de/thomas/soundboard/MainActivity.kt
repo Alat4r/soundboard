@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
         // Nur beim ersten Start importieren, nicht nochmal nach einer Bildschirmdrehung
         if (savedInstanceState == null) handleIncomingShare(intent)
         // Startanimation nur beim normalen Start über das App-Icon, nicht beim Teilen in die App
-        val introSequence = if (savedInstanceState == null && intent.action == Intent.ACTION_MAIN) intro.active else null
+        val introSequence = if (savedInstanceState == null && intent.action == Intent.ACTION_MAIN) intro.pickForStart() else null
         setContent {
             SoundboardTheme {
                 StartAnimation(

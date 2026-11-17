@@ -125,6 +125,16 @@ fun SequenceListScreen(
                     modifier = Modifier.clickable { intro.setActive(null) },
                 )
             }
+            item {
+                ListItem(
+                    headlineContent = { Text("Zufällig") },
+                    supportingContent = { Text("Bei jedem Start eine andere Sequenz") },
+                    leadingContent = {
+                        RadioButton(selected = intro.isRandom, onClick = { intro.setActive(IntroViewModel.RANDOM) })
+                    },
+                    modifier = Modifier.clickable { intro.setActive(IntroViewModel.RANDOM) },
+                )
+            }
             items(intro.state.sequences, key = { it.id }) { sequence ->
                 ListItem(
                     headlineContent = { Text(sequence.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
@@ -145,7 +155,8 @@ fun SequenceListScreen(
             }
             item {
                 Text(
-                    "Der Kreis links legt fest, welche Startsequenz beim Öffnen der App läuft. " +
+                    "Der Kreis links legt fest, welche Startsequenz beim Öffnen der App läuft – " +
+                        "oder ob jedes Mal eine zufällige gezogen wird. " +
                         "Tippe auf eine Sequenz, um Bildausschnitt, Startpunkt und Animation einzustellen. " +
                         "Mit + legst du eine neue aus einem Video im GIF-Reiter an.",
                     modifier = Modifier.padding(16.dp),

@@ -193,7 +193,20 @@ class IntroViewModel(app: Application) : AndroidViewModel(app) {
     var state by mutableStateOf(store.load())
         private set
 
-    val active: StartSequence? get() = state.sequences.find { it.id == state.activeId }
+    val isRandom: Boolean get() = state.activeId == RANDOM
+
+    private val prefs = app.getSharedPreferences("intro", Context.MODE_PRIVATE)
+
+    /**
+     * Die Sequenz, die beim App-Start laufen soll. Bei „Zufällig“ wird eine gezogen,
+     * aber nicht dieselbe wie beim letzten Start (sofern es mehrere gibt).
+     */
+    fun pickForStart(): StartSequence? {
+        if (!isRandom) return state.sequences.find { it.id == state.activeId }
+        val last = prefs.getString(KEY_LAST, null)
+        val pool = state.sequences.filter { it.id != last }.ifEmpty { state.sequences }
+        return pool.randomOrNull()?.also { prefs.edit().putString(KEY_LAST, it.id).apply() }
+    }
 
     fun find(id: String): StartSequence? = state.sequences.find { it.id == id }
 
@@ -234,5 +247,11 @@ class IntroViewModel(app: Application) : AndroidViewModel(app) {
         state = newState
         store.save(newState)
         store.cleanup(newState)
+    }
+
+    companion object {
+        /** Besonderer Wert für activeId: bei jedem Start eine zufällige Sequenz. */
+        const val RANDOM = "random"
+        private const val KEY_LAST = "last_random"
     }
 }
